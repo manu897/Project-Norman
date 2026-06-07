@@ -1,4 +1,4 @@
-"""SQLAlchemy ORM models — used by api and ingest."""
+"""SQLAlchemy ORM models for the Norman API."""
 
 import uuid
 from datetime import datetime
@@ -8,6 +8,7 @@ from sqlalchemy import (
     DateTime,
     Float,
     ForeignKey,
+    Integer,
     String,
     func,
 )
@@ -41,28 +42,36 @@ class Hub(Base):
     )
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     location: Mapped[str | None] = mapped_column(String(255))
+    # bcrypt hash of the per-hub bearer token used for `POST /api/hubs/{id}/batch`.
+    # Plaintext is shown to the user once at hub-create time and never again.
+    api_token_hash: Mapped[str | None] = mapped_column(String(255))
+    last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
 
     owner: Mapped[User] = relationship(back_populates="hubs")
-    sensors: Mapped[list["Sensor"]] = relationship(
+    nodes: Mapped[list["Node"]] = relationship(
         back_populates="hub", cascade="all, delete-orphan"
     )
 
 
-class Sensor(Base):
-    __tablename__ = "sensors"
+class Node(Base):
+    """A sensor node = a plant. Mirrors the hub's `Node` schema."""
 
-    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    __tablename__ = "nodes"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)  # hex MAC-derived
     hub_id: Mapped[str] = mapped_column(
         String(64), ForeignKey("hubs.id", ondelete="CASCADE"), nullable=False, index=True
     )
-    kind: Mapped[str] = mapped_column(String(64), default="bme680", nullable=False)
-    label: Mapped[str | None] = mapped_column(String(255))
+    mac: Mapped[str] = mapped_column(String(17), nullable=False)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    battery_pct: Mapped[int | None] = mapped_column(Integer)
+    calibration: Mapped[dict | None] = mapped_column(JSONB().with_variant(JSON, "sqlite"))
     last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
-    hub: Mapped[Hub] = relationship(back_populates="sensors")
+    hub: Mapped[Hub] = relationship(back_populates="nodes")
 
 
 class Reading(Base):
@@ -71,7 +80,7 @@ class Reading(Base):
     __tablename__ = "readings"
 
     ts: Mapped[datetime] = mapped_column(DateTime(timezone=True), primary_key=True)
-    sensor_id: Mapped[str] = mapped_column(String(64), primary_key=True, index=True)
+    node_id: Mapped[str] = mapped_column(String(64), primary_key=True, index=True)
     metric: Mapped[str] = mapped_column(String(64), primary_key=True)
     value: Mapped[float] = mapped_column(Float, nullable=False)
 

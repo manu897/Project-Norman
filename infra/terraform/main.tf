@@ -63,7 +63,9 @@ resource "google_compute_firewall" "public" {
   network = "default"
   allow {
     protocol = "tcp"
-    ports    = ["443", "8883"]
+    # 8000 = FastAPI origin. Cloudflare proxies public 443 → origin :8000;
+    # the VM itself never terminates TLS.
+    ports    = ["8000"]
   }
   source_ranges = ["0.0.0.0/0"]
   target_tags   = ["norman"]

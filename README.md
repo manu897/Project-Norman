@@ -20,40 +20,42 @@ The project details are in [Confluence](https://arttme.atlassian.net/l/cp/kPyWw9
 
 Norman is the **data + intelligence** side of a three-repo system:
 
-| Repo               | Role                                                          |
-| ------------------ | ------------------------------------------------------------- |
-| `Project-Carl`     | Zephyr firmware — BLE sensor nodes + ESP32 hub                |
-| `Project-Carl-IOS` | iOS app — user-facing dashboard                               |
-| `Project-Norman`   | **Cloud — ingest, time-series storage, REST API, ML**         |
+| Repo               | Role                                                                   |
+| ------------------ | ---------------------------------------------------------------------- |
+| `Project-Carl`     | Firmware — BLE BTHome sensor/camera nodes + ESP32 hub + M5Paper reader |
+| `Project-Carl-IOS` | iOS app — primary user-facing dashboard                                |
+| `Project-Norman`   | **Cloud — long-term storage, off-LAN read fallback, ML predictions**   |
 
-It runs three processes:
+It runs **two** processes (no broker, no ingest worker):
 
-- **mosquitto** — MQTT broker that receives telemetry from Carl hubs.
-- **ingest** ([apps/ingest](apps/ingest)) — validates messages and writes to Postgres.
-- **api** ([apps/api](apps/api)) — FastAPI for the iOS app (auth, hubs, sensors, readings, predictions).
+- **postgres** — Postgres 16 + TimescaleDB extension.
+- **api** ([apps/api](apps/api)) — FastAPI. Read endpoints mirror the hub's `/api/nodes/*` so the iOS app uses one shape against both LAN and cloud. Ingest is an HTTP endpoint: `POST /v1/hubs/{hub_id}/batch`.
 
-Storage is Postgres + TimescaleDB. ML is a scheduled job under [apps/ml](apps/ml) (placeholder until enough data accumulates).
+ML is a scheduled job under [apps/ml](apps/ml) (placeholder until enough data accumulates).
 
 ## Contracts (the synchronization point with Carl and Carl-IOS)
 
-- **Carl → Norman:** MQTT, see [docs/ingest-protocol.md](docs/ingest-protocol.md). Pydantic source of truth at [packages/schemas/telemetry.py](packages/schemas/telemetry.py).
-- **Carl-IOS → Norman:** REST, see [docs/api.md](docs/api.md). OpenAPI spec auto-served at `/openapi.json`.
+- **Carl hub → Norman:** HTTPS batch upload, see [docs/ingest-protocol.md](docs/ingest-protocol.md). Pydantic source of truth at [packages/schemas/telemetry.py](packages/schemas/telemetry.py).
+- **Carl-IOS → Norman:** REST, see [docs/api.md](docs/api.md). Same `Node` / `Reading` / `History` shapes as the hub's `Project-Carl-IOS/api/openapi.yaml`.
 
 ## Quickstart (local, no cloud needed)
 
 ```bash
 cp .env.example .env
-make dev                                   # docker compose up -d
+make dev                                   # docker compose up -d (postgres + api)
 make migrate                               # alembic upgrade head
-make seed                                  # demo user + hub-001 + node-3
-python scripts/fake_publisher.py           # publishes BME680-shaped readings every 5s
+make seed                                  # demo user + hub-001 (writes .demo-hub-token)
+make fake-batch                            # POSTs a batch to /v1/hubs/hub-001/batch
 
-# in another shell — get a token, then read latest:
+# in another shell — get a user JWT, then read the node back through Norman:
 TOKEN=$(curl -s -X POST localhost:8000/v1/auth/login \
-  -d "username=demo@norman.local&password=demodemo1" | python -c "import sys,json;print(json.load(sys.stdin)['access_token'])")
-curl -s -H "Authorization: Bearer $TOKEN" localhost:8000/v1/sensors/node-3/latest | python -m json.tool
+  -d "username=demo@norman.local&password=demodemo1" \
+  | python -c "import sys,json;print(json.load(sys.stdin)['access_token'])")
+curl -s -H "Authorization: Bearer $TOKEN" localhost:8000/v1/nodes | python -m json.tool
+curl -s -H "Authorization: Bearer $TOKEN" \
+  "localhost:8000/v1/nodes/aabbccddeeff/history?range=24h" | python -m json.tool
 
-open http://localhost:8000/docs            # Swagger UI — what Carl-IOS codegens against
+open http://localhost:8000/docs            # Swagger UI — same Node/Reading shapes as the hub
 ```
 
 ## Deploy (GCP free tier)
@@ -64,17 +66,15 @@ Terraform under [infra/terraform/](infra/terraform/) provisions a free-tier `e2-
 
 ```
 apps/
-  api/        FastAPI service (Dockerfile, routers, auth, models)
-  ingest/     MQTT → Postgres worker (Dockerfile)
+  api/        FastAPI service: auth, hubs, nodes, ingest, predictions
   ml/         training + inference (placeholder)
 packages/
-  schemas/    shared Pydantic — telemetry contract
+  schemas/    shared Pydantic — Carl-hub→Norman batch contract
 docs/         architecture, ingest protocol, REST API
 infra/
-  mosquitto/  broker config (local dev anonymous; prod is mTLS)
   terraform/  GCP free-tier provisioning
 migrations/   Alembic
 scripts/
-  fake_publisher.py   simulates a Carl hub for local smoke tests
+  fake_hub_post.py   simulates a Carl hub batch upload for local smoke tests
 tests/        pytest
 ```

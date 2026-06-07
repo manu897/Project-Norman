@@ -1,9 +1,35 @@
-"""Pydantic API request/response models (separate from ORM)."""
+"""Pydantic request/response models for the Norman REST API.
+
+Reading/Node/Calibration/History shapes mirror `Project-Carl-IOS/api/openapi.yaml`
+so the iOS app speaks one contract for both LAN-hub and cloud-Norman paths.
+"""
 
 from datetime import datetime
+from typing import Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
+
+from packages.schemas.telemetry import Calibration, HubBatchUpload, Reading
+
+# Re-export shared schemas so router files can import everything from one place.
+__all__ = [
+    "RegisterRequest",
+    "TokenResponse",
+    "HubCreate",
+    "HubOut",
+    "HubCreateOut",
+    "NodeOut",
+    "HistoryOut",
+    "PredictionOut",
+    "BatchAcceptedOut",
+    "Reading",
+    "Calibration",
+    "HubBatchUpload",
+]
+
+
+# --- Auth ---
 
 
 class RegisterRequest(BaseModel):
@@ -14,6 +40,9 @@ class RegisterRequest(BaseModel):
 class TokenResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
+
+
+# --- Hubs ---
 
 
 class HubCreate(BaseModel):
@@ -28,28 +57,43 @@ class HubOut(BaseModel):
     id: str
     name: str
     location: str | None
+    last_seen_at: datetime | None
     created_at: datetime
 
 
-class SensorOut(BaseModel):
+class HubCreateOut(HubOut):
+    """Hub-create response — includes the bearer token, exposed exactly once."""
+
+    api_token: str
+
+
+# --- Nodes (mirror of hub's Node schema) ---
+
+
+class NodeOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: str
+    mac: str
+    name: str
     hub_id: str
-    kind: str
-    label: str | None
-    last_seen_at: datetime | None
+    online: bool
+    last_seen: datetime | None
+    battery_pct: int | None
+    latest: Reading | None
+    calibration: Calibration | None
 
 
-class ReadingOut(BaseModel):
-    ts: datetime
-    metric: str
-    value: float
+# --- History (mirror of hub's History schema) ---
 
 
-class LatestReadingOut(BaseModel):
-    sensor_id: str
-    metrics: dict[str, ReadingOut]
+class HistoryOut(BaseModel):
+    node_id: str
+    range: Literal["24h", "7d", "30d"]
+    samples: list[Reading]
+
+
+# --- Predictions ---
 
 
 class PredictionOut(BaseModel):
@@ -60,3 +104,11 @@ class PredictionOut(BaseModel):
     ts: datetime
     kind: str
     payload: dict
+
+
+# --- Ingest ---
+
+
+class BatchAcceptedOut(BaseModel):
+    nodes_seen: int
+    samples_inserted: int

@@ -1,77 +1,97 @@
-# Ingest protocol — Carl → Norman over MQTT
+# Ingest protocol — Carl hub → Norman over HTTPS
 
-This is the contract Carl firmware (`Project-Carl`) implements as a publisher, and Norman ingest (`apps/ingest`) implements as a subscriber. The Pydantic source of truth lives at [`packages/schemas/telemetry.py`](../packages/schemas/telemetry.py).
+Carl hubs upload telemetry to Norman in **batches over HTTPS**. There is no MQTT broker in Norman; the hub keeps a rolling history buffer locally (BLE BTHome decoder writes into NVS) and POSTs to Norman on a schedule.
 
-## Transport
+Source of truth for the `Reading` payload shape is `Project-Carl-IOS/api/openapi.yaml`. If that changes, update this doc and [`packages/schemas/telemetry.py`](../packages/schemas/telemetry.py) together.
 
-- Protocol: **MQTT 3.1.1 or 5**
-- Broker: Mosquitto running in the Norman stack
-- Production: TLS on **8883**, per-hub **mTLS** client cert
-- Local dev: plain on **1883**, anonymous
-
-## Topic
+## Endpoint
 
 ```
-carl/{hub_id}/sensor/{sensor_id}/telemetry
+POST /v1/hubs/{hub_id}/batch
+Authorization: Bearer <hub_api_token>
+Content-Type: application/json
 ```
 
-- `hub_id` — stable identifier of the ESP32 hub (e.g. its MAC, or a configured device ID)
-- `sensor_id` — stable identifier of the BLE sensor node
-- QoS **1**, retained **false**
+- `hub_id` is the same string the hub uses for itself on the LAN dashboard (`/api/health.hub_id`).
+- `hub_api_token` is per-hub. The user gets it once at `POST /v1/hubs` time and provisions it on the hub via menuconfig (Phase 3a) or the captive portal (Phase 3f).
+- Stored as a bcrypt hash on Norman in `hubs.api_token_hash`. Distinct from the user's JWT used for read endpoints.
 
-Norman subscribes to `carl/+/sensor/+/telemetry`.
-
-## Payload
-
-UTF-8 JSON, single object per message.
+## Request body
 
 ```json
 {
-  "ts": "2026-04-30T18:30:00Z",
-  "hub_id": "hub-001",
-  "sensor_id": "node-3",
-  "metrics": {
-    "temperature_c": 24.3,
-    "humidity_pct": 61.2,
-    "pressure_hpa": 1013.2,
-    "voc_index": 145,
-    "battery_v": 3.71,
-    "rssi_dbm": -67
-  }
+  "hub_version": "0.1.0",
+  "generated_at": "2026-05-04T18:00:00Z",
+  "nodes": [
+    {
+      "id": "aabbccddeeff",
+      "mac": "AA:BB:CC:DD:EE:FF",
+      "name": "Bedroom Monstera",
+      "calibration": {
+        "soil_dry_pct": 25.0,
+        "soil_wet_pct": 65.0,
+        "battery_low_pct": 15,
+        "offline_after_minutes": 30
+      },
+      "samples": [
+        {
+          "ts": "2026-05-04T17:55:00Z",
+          "temperature_c": 24.3,
+          "humidity_pct": 61.2,
+          "pressure_hpa": 1013.2,
+          "soil_pct": 41.0,
+          "illuminance_lux": 320.0,
+          "battery_pct": 78
+        }
+      ]
+    }
+  ]
 }
 ```
 
-| Field       | Type              | Notes                                                 |
-| ----------- | ----------------- | ----------------------------------------------------- |
-| `ts`        | ISO 8601 UTC      | When the sample was taken on the node, not published. |
-| `hub_id`    | string, ≤64 chars | Must match the topic segment.                         |
-| `sensor_id` | string, ≤64 chars | Must match the topic segment.                         |
-| `metrics`   | object<str,float> | Keys below are recommended; unknown keys are accepted and stored. |
+| Field | Notes |
+|---|---|
+| `hub_version` | Hub firmware version string. Logged on Norman for support. |
+| `generated_at` | When the hub assembled the batch (ISO 8601 UTC). Not the sample time. |
+| `nodes[*].id` | Hex-string node id (lowercase, MAC-derived). Matches the hub's `Node.id`. |
+| `nodes[*].mac` | `AA:BB:CC:DD:EE:FF`. |
+| `nodes[*].name` | User-set plant name. Hub is authoritative. |
+| `nodes[*].calibration` | Optional. If present, replaces the stored calibration for that node. |
+| `nodes[*].samples[*]` | One `Reading` per sample, exactly the iOS spec's `Reading` schema. All metric fields nullable. |
 
 ### Recommended metric keys
 
-| Key             | Unit          | Source            |
-| --------------- | ------------- | ----------------- |
-| `temperature_c` | °C            | BME680            |
-| `humidity_pct`  | % RH          | BME680            |
-| `pressure_hpa`  | hPa           | BME680            |
-| `voc_index`     | unitless 0–500| BME680 gas sensor |
-| `battery_v`     | volts         | node ADC          |
-| `rssi_dbm`      | dBm (negative)| BLE link, hub-side|
+Mirror the hub's `carl_reading_t`:
 
-If Carl needs to report a metric that isn't listed, it can — Norman will store it. Add it to this table and to `KNOWN_METRICS` in `packages/schemas/telemetry.py` so it's documented.
+| Key | Unit | Source |
+|---|---|---|
+| `temperature_c` | °C | BME280 |
+| `humidity_pct` | % RH | BME280 |
+| `pressure_hpa` | hPa | BME280 |
+| `soil_pct` | % (calibrated, 0–100) | capacitive soil probe |
+| `illuminance_lux` | lux | VEML7700 |
+| `battery_pct` | integer 0–100 | node coin-cell estimate |
 
-## Authentication (production)
+Adding a new metric is backwards-compatible: Pydantic ignores unknown keys in `Reading`. To make it queryable on Norman, add it to `KNOWN_METRICS` in [`packages/schemas/telemetry.py`](../packages/schemas/telemetry.py).
 
-- Each hub gets a unique X.509 client cert signed by Norman's private CA.
-- Mosquitto is configured with `require_certificate true` and `use_identity_as_username true`.
-- The CN of the cert MUST equal the `hub_id` segment in the topic — Mosquitto's ACL enforces a hub can only publish under its own `carl/{cn}/...` prefix.
+## Response
 
-For local dev: anonymous, no TLS.
+- `202 Accepted` with `{"nodes_seen": N, "samples_inserted": M}`.
+- `401 Unauthorized` if the bearer token doesn't match the stored hash for `{hub_id}`.
+- `422 Unprocessable Entity` if the body fails schema validation. Hub should not retry; fix the payload.
 
-## Failure modes
+## Idempotency
 
-- **Malformed JSON** — Norman drops with a warning log. Carl should not retry; fix the schema.
-- **Validation error** (Pydantic) — same as above.
-- **Norman unreachable** — Carl SHOULD buffer recent samples in flash and replay on reconnect (QoS 1 already guarantees broker-side delivery once the hub is back online and the broker is up).
-- **Schema evolution** — backwards-compatible (adding a new metric key) is safe today. A renamed or removed key is a breaking change and must be coordinated.
+Norman dedups by `(ts, node_id, metric)` on insert (`ON CONFLICT DO UPDATE` against the readings hypertable). The hub can safely retry the same batch after a TCP/TLS blip — duplicates are no-ops.
+
+The hub should still acknowledge `202` to garbage-collect its local buffer, but resending the same range on the next cycle is harmless.
+
+## Cadence
+
+- **Steady state:** once per 24h (overnight). Configurable via menuconfig.
+- **Backfill:** on first connection after a long offline window, the hub may send multiple batches.
+
+## TLS / auth notes
+
+- Production Norman is served behind Cloudflare (or Cloud Run) over TLS. The hub validates against the system trust store baked into ESP-IDF.
+- The bearer token is the only secret on the hub. If a hub is reflashed, the user re-issues a new token by deleting + re-creating the hub on Norman.

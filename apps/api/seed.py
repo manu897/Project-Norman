@@ -1,21 +1,25 @@
-"""Seed a demo user, hub, and sensor for local dev.
+"""Seed a demo user + hub (with API token) for local dev.
 
 Run with: docker compose run --rm api python -m apps.api.seed
+
+Writes the demo hub's plaintext API token to `.demo-hub-token` in the
+container working directory — the fake-hub-post script reads it from there.
 """
 
 import asyncio
 import logging
+import pathlib
 
 from sqlalchemy import select
 
 from apps.api.db import SessionLocal
-from apps.api.models import Hub, Sensor, User
-from apps.api.security import hash_password
+from apps.api.models import Hub, User
+from apps.api.security import generate_hub_token, hash_hub_token, hash_password
 
 DEMO_EMAIL = "demo@norman.local"
 DEMO_PASSWORD = "demodemo1"
 DEMO_HUB_ID = "hub-001"
-DEMO_SENSOR_ID = "node-3"
+TOKEN_FILE = pathlib.Path(".demo-hub-token")
 
 log = logging.getLogger("seed")
 logging.basicConfig(level="INFO", format="%(asctime)s %(levelname)s %(message)s")
@@ -34,14 +38,19 @@ async def main() -> None:
 
         hub = await session.get(Hub, DEMO_HUB_ID)
         if hub is None:
-            hub = Hub(id=DEMO_HUB_ID, owner_id=user.id, name="Demo Hub", location="lab")
+            plain_token = generate_hub_token()
+            hub = Hub(
+                id=DEMO_HUB_ID,
+                owner_id=user.id,
+                name="Demo Hub",
+                location="lab",
+                api_token_hash=hash_hub_token(plain_token),
+            )
             session.add(hub)
-            log.info("created demo hub %s", DEMO_HUB_ID)
-
-        sensor = await session.get(Sensor, DEMO_SENSOR_ID)
-        if sensor is None:
-            session.add(Sensor(id=DEMO_SENSOR_ID, hub_id=DEMO_HUB_ID, label="BME680 #3"))
-            log.info("created demo sensor %s", DEMO_SENSOR_ID)
+            TOKEN_FILE.write_text(plain_token)
+            log.info("created demo hub %s — token written to %s", DEMO_HUB_ID, TOKEN_FILE)
+        else:
+            log.info("demo hub %s already exists (token unchanged)", DEMO_HUB_ID)
 
         await session.commit()
     log.info("seed complete — login with %s / %s", DEMO_EMAIL, DEMO_PASSWORD)

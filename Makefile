@@ -1,4 +1,4 @@
-.PHONY: dev down logs seed migrate test lint fmt fake-publish
+.PHONY: dev down logs seed migrate test lint fmt fake-batch
 
 dev:
 	docker compose up --build -d
@@ -26,5 +26,7 @@ fmt:
 	ruff format .
 	ruff check --fix .
 
-fake-publish:
-	python scripts/fake_publisher.py --hub hub-001 --sensor node-3
+# Simulate a hub uploading a batch (requires `make seed` to have created
+# the demo hub and its API token).
+fake-batch:
+	python scripts/fake_hub_post.py

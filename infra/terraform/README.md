@@ -29,10 +29,10 @@ terraform apply
 
 1. SSH into the VM (`gcloud compute ssh norman --zone=us-central1-a`).
 2. Clone this repo on the VM.
-3. Generate certs for production Mosquitto (mTLS), drop them in `infra/mosquitto/certs/`.
-4. Swap `infra/mosquitto/mosquitto.conf` for the production version (TLS on 8883, no anonymous, ACL by CN).
+3. Copy `.env.example` to `.env` and set `JWT_SECRET` to a real secret (`openssl rand -hex 32`).
+4. Terminate TLS in front of the API — Cloudflare proxied DNS for `norman.<domain>` works without any cert config on the VM (origin runs plain HTTP on :8000, Cloudflare adds the public HTTPS).
 5. `docker compose up -d`.
-6. Point your domain at the static IP (Cloudflare proxied → `norman.<domain>`).
+6. Point your domain at the static IP (Cloudflare proxied → `norman.<domain>` → port 8000).
 
 ## Free-tier notes
 

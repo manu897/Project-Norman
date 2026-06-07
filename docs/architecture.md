@@ -4,51 +4,50 @@
 
 Norman is the data + intelligence side of a three-repo system:
 
-| Repo               | Role                                                          |
-| ------------------ | ------------------------------------------------------------- |
-| Project-Carl       | Zephyr firmware: BLE sensor nodes + ESP32 hub                 |
-| Project-Carl-IOS   | iOS app — user-facing dashboard                               |
-| **Project-Norman** | **Cloud: ingest, storage, REST API, ML for yield/health**     |
+| Repo               | Role                                                                     |
+| ------------------ | ------------------------------------------------------------------------ |
+| Project-Carl       | Firmware — BLE BTHome sensor/camera nodes + ESP32 hub + M5Paper reader   |
+| Project-Carl-IOS   | iOS app — primary user-facing dashboard                                  |
+| **Project-Norman** | **Cloud — long-term storage, off-LAN read fallback, ML predictions**     |
 
-Carl pushes telemetry to Norman over MQTT. Carl-IOS reads it back over HTTPS.
+The Carl hub is the central data plane on the LAN. Norman is **not** in the real-time path: the hub aggregates BLE BTHome adverts locally, then pushes a batch to Norman on a schedule. The iOS app talks to the hub directly when on home Wi-Fi and falls back to Norman when off-network.
 
 ```
-   Carl hub (ESP32)                 Norman                              Carl-IOS
-   ├─ MQTT publisher    ── mTLS ──▶ Mosquitto :8883
-   │                                  │
-   │                                  ▼
-   │                                ingest worker ──▶ Postgres + TimescaleDB
-   │                                                      │
-   │                                                      ├──▶ FastAPI :8000  ◀── HTTPS ──┘
-   │                                                      └──▶ ML pipeline (scheduled, GCS for artifacts)
+Sensor nodes  ─BTHome v2 adv (AES-CCM-128)─▶  Carl hub
+                                              │
+        LAN ◀── HTTP (carl-hub.local) ───────┘  ── daily HTTPS POST ──▶  Norman
+        │                                                                 │
+   iOS app (primary)                                              iOS app (fallback, off-LAN)
+                                                                          │
+                                                                     ML / long-term storage
 ```
 
 ## Runtime processes
 
-Three Docker containers (one VM in production, `docker-compose` locally):
+Just **two** containers (postgres + api). No broker, no separate ingest worker — ingest is an HTTP endpoint on the api service.
 
-1. **mosquitto** — MQTT broker. TLS on 8883 in prod, plain on 1883 locally.
-2. **ingest** (`apps/ingest`) — subscribes to `carl/+/sensor/+/telemetry`, validates with the Pydantic model in `packages/schemas/telemetry.py`, writes long-format rows to `readings`, updates `sensors.last_seen_at`.
-3. **api** (`apps/api`) — FastAPI; serves the iOS app. JWT auth, hubs/sensors/readings/predictions endpoints. OpenAPI is auto-generated and served at `/openapi.json` for iOS Swift codegen.
+1. **postgres** — Postgres 16 + TimescaleDB extension. Stores users, hubs, nodes, readings (hypertable), predictions.
+2. **api** (`apps/api`) — FastAPI:
+   - **Read endpoints** mirror the hub's `/api/nodes/*` so the iOS app speaks one shape against both. JWT auth.
+   - **Ingest endpoint** `POST /v1/hubs/{hub_id}/batch` takes a hub batch. Per-hub bearer token auth.
+   - OpenAPI auto-generated at `/openapi.json`.
 
 The ML pipeline (`apps/ml`) is a scheduled job, not a long-running process. It reads from Postgres, writes models to GCS, and the `api` service loads them for inference.
 
 ## Storage
 
-Postgres + TimescaleDB extension (free, OSS, runs in Docker). Schema:
-
 - `users` — auth principals
-- `hubs` — owned by users
-- `sensors` — belong to hubs
-- `readings` — time-series **hypertable**, long format `(ts, sensor_id, metric, value)`
-- `predictions` — ML output, `jsonb` payload for flexibility
+- `hubs` — owned by users, with `api_token_hash` for upload auth
+- `nodes` — belong to hubs; mirror of the hub's `Node` schema (`id`, `mac`, `name`, `battery_pct`, `calibration` jsonb, `last_seen_at`)
+- `readings` — time-series **hypertable**, long format `(ts, node_id, metric, value)`
+- `predictions` — ML output, `jsonb` payload
 
-Long-format `readings` lets new metrics be added without migrations — useful while the firmware side is in flux.
+Long-format `readings` lets new metrics be added without migrations.
 
 ## Cloud target
 
-GCP always-free tier — `e2-micro` VM is always-free in `us-west1` / `us-central1` / `us-east1` (one per project), AWS `t2.micro` is only 12 months. All three services run on a single VM. GCS bucket holds ML artifacts. Static IP + Cloudflare DNS in front. Provisioned by `infra/terraform/`.
+GCP always-free tier — `e2-micro` VM is always-free in `us-west1` / `us-central1` / `us-east1` (one per project), AWS `t2.micro` is only 12 months. Both containers run on the single VM. GCS bucket holds ML artifacts. Static IP + Cloudflare DNS in front. Provisioned by `infra/terraform/`.
 
 ## Local dev
 
-`docker-compose up` brings up the whole stack on the developer's laptop, no cloud needed. `scripts/fake_publisher.py` simulates a Carl hub feeding plausible BME680 readings every few seconds. See [README.md](../README.md) for the smoke-test recipe.
+`docker-compose up` brings up postgres + api on the developer's laptop. `scripts/fake_hub_post.py` simulates a Carl hub by POSTing a synthetic batch — useful for exercising the ingest endpoint and seeding the DB with plausible-looking data. See [README.md](../README.md) for the smoke-test recipe.

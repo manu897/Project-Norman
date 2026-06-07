@@ -1,3 +1,9 @@
-from packages.schemas.telemetry import TelemetryPayload, KNOWN_METRICS
+from packages.schemas.telemetry import (
+    KNOWN_METRICS,
+    Calibration,
+    HubBatchUpload,
+    NodeBatch,
+    Reading,
+)
 
-__all__ = ["TelemetryPayload", "KNOWN_METRICS"]
+__all__ = ["KNOWN_METRICS", "Calibration", "HubBatchUpload", "NodeBatch", "Reading"]
