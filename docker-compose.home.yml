@@ -1,0 +1,61 @@
+# Overrides for running Norman on a home-network machine (Ubuntu laptop / mini PC).
+#
+# Bring up with: docker compose -f docker-compose.yml -f docker-compose.home.yml up -d
+#
+# How this differs from the cloud overlay (docker-compose.prod.yml):
+#
+#   - No caddy, no certbot, no TLS on the broker. Cloudflare Tunnel terminates
+#     HTTPS at Cloudflare's edge and reaches the api container over an outbound
+#     -only connection, so nothing needs an inbound port or a certificate.
+#   - mosquitto runs a single PLAINTEXT listener on 1883, published to the LAN.
+#     The Carl hubs are on the same network, so MQTT never crosses the internet.
+#   - No inbound ports open on your router. No port forwarding. Works behind
+#     CGNAT and through a changing home IP.
+#
+# Expects in .env:
+#   CLOUDFLARE_TUNNEL_TOKEN — from the Cloudflare Zero Trust dashboard
+#   MQTT_USERNAME / MQTT_PASSWORD — must match infra/mosquitto/secrets/passwd
+#   JWT_SECRET, POSTGRES_* / DATABASE_URL — real values, not the dev defaults
+#
+# And on disk:
+#   infra/mosquitto/secrets/passwd — produced by `mosquitto_passwd -b -c`
+
+services:
+  postgres:
+    restart: unless-stopped
+    ports: !override []   # not published; api and ingest reach it internally
+
+  mosquitto:
+    restart: unless-stopped
+    ports: !override
+      - "1883:1883"       # published to the LAN so Carl hubs can publish here
+    volumes: !override
+      - ./infra/mosquitto/mosquitto.home.conf:/mosquitto/config/mosquitto.conf:ro
+      - ./infra/mosquitto/secrets/passwd:/mosquitto/config/passwd:ro
+      - mosquitto_data:/mosquitto/data
+      - mosquitto_log:/mosquitto/log
+
+  api:
+    restart: unless-stopped
+    # Published on the LAN for local debugging (http://<laptop-ip>:8000/docs).
+    # Off-LAN access goes through cloudflared, not this port. Your router is
+    # not forwarding anything, so this is not internet-reachable.
+    command: >
+      sh -c "alembic upgrade head &&
+             uvicorn apps.api.main:app --host 0.0.0.0 --port 8000 --workers 2"
+    volumes: !override []
+
+  ingest:
+    restart: unless-stopped
+    volumes: !override []
+
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    restart: unless-stopped
+    depends_on:
+      - api
+    env_file: .env
+    # Dashboard-managed ("remote") tunnel: routing is configured in the
+    # Cloudflare Zero Trust UI, so the only local config is the token.
+    # Map norman.manideepreddy.com → http://api:8000 there.
+    command: tunnel --no-autoupdate run --token ${CLOUDFLARE_TUNNEL_TOKEN}

@@ -3,7 +3,7 @@ import logging
 from fastapi import FastAPI
 
 from apps.api.config import get_settings
-from apps.api.routers import auth, hubs, ingest, nodes, predictions
+from apps.api.routers import auth, hubs, ingest, nodes, rooms
 
 settings = get_settings()
 logging.basicConfig(
@@ -12,20 +12,21 @@ logging.basicConfig(
 
 app = FastAPI(
     title="Norman API",
-    version="0.1.0",
+    version="0.2.0",
     description=(
         "Project Norman REST API. Mirrors the Carl hub HTTP contract "
         "(`Project-Carl-IOS/api/openapi.yaml`) on the read side so the iOS app "
         "uses one shape for both LAN-hub and cloud-Norman paths. Ingest is "
-        "HTTPS batch upload from the hub, authenticated with a per-hub bearer token."
+        "HTTPS batch upload from the hub, authenticated with a per-hub bearer token. "
+        "Three node kinds: plant / room / camera; predictions are per-plant-node."
     ),
 )
 
 app.include_router(auth.router)
 app.include_router(hubs.router)
+app.include_router(rooms.router)
 app.include_router(nodes.router)
 app.include_router(ingest.router)
-app.include_router(predictions.router)
 
 
 @app.get("/health", tags=["meta"])

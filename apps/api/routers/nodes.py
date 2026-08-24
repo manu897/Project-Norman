@@ -12,10 +12,16 @@ from sqlalchemy import and_, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from apps.api.db import get_session
-from apps.api.models import Hub, Node, Reading, User
-from apps.api.schemas import HistoryOut, NodeOut, Reading as ReadingSchema
+from apps.api.models import Hub, Node, Prediction, Reading, User
+from apps.api.schemas import (
+    HistoryOut,
+    NodeOut,
+    PredictionOut,
+    Reading as ReadingSchema,
+    SnapshotOut,
+)
 from apps.api.security import current_user
-from packages.schemas.telemetry import KNOWN_METRICS
+from packages.schemas.telemetry import KNOWN_METRICS, NodeKind
 
 router = APIRouter(prefix="/v1/nodes", tags=["nodes"])
 
@@ -25,7 +31,6 @@ _RANGE_TO_DELTA: dict[str, timedelta] = {
     "30d": timedelta(days=30),
 }
 _RANGE_TO_BUCKET: dict[str, str] = {
-    # downsample wider ranges to keep payload reasonable for the iOS app
     "24h": "5 minutes",
     "7d": "1 hour",
     "30d": "6 hours",
@@ -66,7 +71,6 @@ async def _latest_reading(node_id: str, session: AsyncSession) -> ReadingSchema 
 
 
 def _is_online(node: Node, now: datetime) -> bool:
-    """Online if seen recently. Default cutoff matches the iOS Calibration default."""
     cutoff_minutes = 30
     if isinstance(node.calibration, dict):
         cutoff_minutes = int(node.calibration.get("offline_after_minutes", cutoff_minutes))
@@ -75,32 +79,37 @@ def _is_online(node: Node, now: datetime) -> bool:
     return (now - node.last_seen_at) <= timedelta(minutes=cutoff_minutes)
 
 
+async def _to_node_out(node: Node, session: AsyncSession, now: datetime) -> NodeOut:
+    latest = await _latest_reading(node.id, session)
+    return NodeOut(
+        id=node.id,
+        kind=NodeKind(node.kind),
+        mac=node.mac,
+        name=node.name,
+        hub_id=node.hub_id,
+        room_id=node.room_id,
+        species=node.species,
+        online=_is_online(node, now),
+        last_seen=node.last_seen_at,
+        battery_pct=node.battery_pct,
+        latest=latest,
+        calibration=node.calibration,
+    )
+
+
 @router.get("", response_model=list[NodeOut])
 async def list_nodes(
+    kind: NodeKind | None = Query(None, description="Filter by node kind"),
     user: User = Depends(current_user),
     session: AsyncSession = Depends(get_session),
 ) -> list[NodeOut]:
-    """All nodes the user owns (across all their hubs)."""
+    """All nodes the user owns across all hubs. Optional `kind` filter."""
     stmt = select(Node).join(Hub, Hub.id == Node.hub_id).where(Hub.owner_id == user.id)
+    if kind is not None:
+        stmt = stmt.where(Node.kind == kind.value)
     nodes = (await session.scalars(stmt)).all()
     now = datetime.now(timezone.utc)
-    out: list[NodeOut] = []
-    for node in nodes:
-        latest = await _latest_reading(node.id, session)
-        out.append(
-            NodeOut(
-                id=node.id,
-                mac=node.mac,
-                name=node.name,
-                hub_id=node.hub_id,
-                online=_is_online(node, now),
-                last_seen=node.last_seen_at,
-                battery_pct=node.battery_pct,
-                latest=latest,
-                calibration=node.calibration,
-            )
-        )
-    return out
+    return [await _to_node_out(n, session, now) for n in nodes]
 
 
 @router.get("/{node_id}", response_model=NodeOut)
@@ -110,18 +119,7 @@ async def get_node(
     session: AsyncSession = Depends(get_session),
 ) -> NodeOut:
     node = await _ensure_owned_node(node_id, user, session)
-    latest = await _latest_reading(node.id, session)
-    return NodeOut(
-        id=node.id,
-        mac=node.mac,
-        name=node.name,
-        hub_id=node.hub_id,
-        online=_is_online(node, datetime.now(timezone.utc)),
-        last_seen=node.last_seen_at,
-        battery_pct=node.battery_pct,
-        latest=latest,
-        calibration=node.calibration,
-    )
+    return await _to_node_out(node, session, datetime.now(timezone.utc))
 
 
 @router.get("/{node_id}/history", response_model=HistoryOut)
@@ -152,7 +150,6 @@ async def get_node_history(
         )
     ).all()
 
-    # Group rows by bucketed ts → assemble per-ts Reading.
     by_ts: dict[datetime, dict[str, float]] = {}
     for r in rows:
         if r.metric not in KNOWN_METRICS:
@@ -161,3 +158,67 @@ async def get_node_history(
 
     samples = [_build_reading(ts, vals) for ts, vals in sorted(by_ts.items())]
     return HistoryOut(node_id=node_id, range=range, samples=samples)
+
+
+@router.get("/{plant_id}/snapshot", response_model=SnapshotOut)
+async def get_plant_snapshot(
+    plant_id: str,
+    user: User = Depends(current_user),
+    session: AsyncSession = Depends(get_session),
+) -> SnapshotOut:
+    """Joined view: plant probe readings + the ambient from its assigned room.
+
+    Mirrors the join the hub does on the LAN at `/api/nodes/{id}` for plant nodes.
+    """
+    plant = await _ensure_owned_node(plant_id, user, session)
+    if plant.kind != NodeKind.plant.value:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            f"Node {plant_id} is kind={plant.kind}, snapshot is plant-only",
+        )
+
+    now = datetime.now(timezone.utc)
+    plant_out = await _to_node_out(plant, session, now)
+
+    room_out: NodeOut | None = None
+    if plant.room_id is not None:
+        # Find the room-kind node (if any) in this room within the same hub.
+        stmt = select(Node).where(
+            Node.hub_id == plant.hub_id,
+            Node.room_id == plant.room_id,
+            Node.kind == NodeKind.room.value,
+        )
+        # A room *may* have its own ambient sensor, identified by sharing the room_id.
+        # Convention: the hub sets `room_id` on a room-node to point at itself's room.
+        room_node = (await session.scalars(stmt)).first()
+        if room_node is None:
+            # Fallback: room-node identified by `id == plant.room_id` (when the hub
+            # uses the room-node's id as the room id — see ingest-protocol.md).
+            stmt2 = select(Node).where(
+                Node.hub_id == plant.hub_id,
+                Node.id == plant.room_id,
+                Node.kind == NodeKind.room.value,
+            )
+            room_node = (await session.scalars(stmt2)).first()
+        if room_node is not None:
+            room_out = await _to_node_out(room_node, session, now)
+
+    return SnapshotOut(plant=plant_out, room=room_out)
+
+
+@router.get("/{plant_id}/predictions", response_model=list[PredictionOut])
+async def get_plant_predictions(
+    plant_id: str,
+    limit: int = Query(20, ge=1, le=100),
+    user: User = Depends(current_user),
+    session: AsyncSession = Depends(get_session),
+) -> list[Prediction]:
+    """ML output for one plant. Returns `[]` until the ML pipeline lands."""
+    await _ensure_owned_node(plant_id, user, session)
+    stmt = (
+        select(Prediction)
+        .where(Prediction.node_id == plant_id)
+        .order_by(Prediction.ts.desc())
+        .limit(limit)
+    )
+    return list(await session.scalars(stmt))

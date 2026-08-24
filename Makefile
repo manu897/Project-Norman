@@ -1,4 +1,4 @@
-.PHONY: dev down logs seed migrate test lint fmt fake-batch
+.PHONY: dev down logs seed migrate test lint fmt fake-batch fake-publish
 
 dev:
 	docker compose up --build -d
@@ -26,7 +26,11 @@ fmt:
 	ruff format .
 	ruff check --fix .
 
-# Simulate a hub uploading a batch (requires `make seed` to have created
-# the demo hub and its API token).
+# Simulate a hub uploading a batch via the HTTPS path (requires `make seed`).
 fake-batch:
 	python scripts/fake_hub_post.py
+
+# Simulate a hub publishing via the MQTT path — what Carl actually does.
+# Topic: carl/{site_id}/{node_id}. Requires mosquitto from `make dev` running.
+fake-publish:
+	python scripts/fake_hub_publish.py

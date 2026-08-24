@@ -1,0 +1,27 @@
+# Caddy fronts the Norman API in production.
+#
+# Why this exists: Cloudflare's proxy only forwards to a fixed set of origin
+# ports, and 8000 isn't one of them. Rather than run uvicorn on a proxiable
+# port with plaintext between Cloudflare and the origin, Caddy terminates
+# real TLS here (auto Let's Encrypt) and reverse-proxies internally.
+#
+# Requires in .env:
+#   NORMAN_DOMAIN=norman.example.com
+#   ACME_EMAIL=you@example.com
+
+{
+	email {$ACME_EMAIL}
+}
+
+{$NORMAN_DOMAIN} {
+	encode zstd gzip
+
+	reverse_proxy api:8000 {
+		health_uri /health
+	}
+
+	log {
+		output stdout
+		format console
+	}
+}

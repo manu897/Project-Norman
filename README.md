@@ -22,38 +22,54 @@ Norman is the **data + intelligence** side of a three-repo system:
 
 | Repo               | Role                                                                   |
 | ------------------ | ---------------------------------------------------------------------- |
-| `Project-Carl`     | Firmware — BLE BTHome sensor/camera nodes + ESP32 hub + M5Paper reader |
+| `Project-Carl`     | Firmware — BLE BTHome plant/room/camera nodes + ESP32 hub + M5Paper    |
 | `Project-Carl-IOS` | iOS app — primary user-facing dashboard                                |
-| `Project-Norman`   | **Cloud — long-term storage, off-LAN read fallback, ML predictions**   |
+| `Project-Norman`   | **Cloud — long-term storage, off-LAN read fallback, per-plant ML**     |
 
-It runs **two** processes (no broker, no ingest worker):
+Three node kinds — **plant** (soil probe), **room** (ambient T/H/P/lux), **camera** (image stills stay on the hub, only battery heartbeats reach Norman). Plant nodes carry a `room_id` so we can serve a joined plant+room snapshot the same way the hub does on the LAN.
+
+It runs **four** processes:
 
 - **postgres** — Postgres 16 + TimescaleDB extension.
-- **api** ([apps/api](apps/api)) — FastAPI. Read endpoints mirror the hub's `/api/nodes/*` so the iOS app uses one shape against both LAN and cloud. Ingest is an HTTP endpoint: `POST /v1/hubs/{hub_id}/batch`.
+- **mosquitto** — MQTT broker; Carl hubs publish here.
+- **api** ([apps/api](apps/api)) — FastAPI. Read endpoints mirror the hub's `/api/nodes/*` so the iOS app uses one shape against both LAN and cloud. Also exposes `POST /v1/hubs/{id}/batch` for the HTTPS alternate path.
+- **ingest** ([apps/ingest](apps/ingest)) — MQTT subscriber on `carl/+/+`. The actual ingest path Carl uses.
 
-ML is a scheduled job under [apps/ml](apps/ml) (placeholder until enough data accumulates).
+ML is a scheduled job under [apps/ml](apps/ml) — per-plant health + watering predictions. Currently a stub heuristic; real model once data accumulates.
 
 ## Contracts (the synchronization point with Carl and Carl-IOS)
 
-- **Carl hub → Norman:** HTTPS batch upload, see [docs/ingest-protocol.md](docs/ingest-protocol.md). Pydantic source of truth at [packages/schemas/telemetry.py](packages/schemas/telemetry.py).
+- **Carl hub → Norman (primary):** MQTT publish on `carl/{site_id}/{node_id}`, every ~30s. See [docs/ingest-protocol.md](docs/ingest-protocol.md). Pydantic source of truth: `NodeMessage` in [packages/schemas/telemetry.py](packages/schemas/telemetry.py).
+- **Carl hub → Norman (alternate):** HTTPS POST to `/v1/hubs/{id}/batch`. Same doc, richer shape (`HubBatchUpload`).
 - **Carl-IOS → Norman:** REST, see [docs/api.md](docs/api.md). Same `Node` / `Reading` / `History` shapes as the hub's `Project-Carl-IOS/api/openapi.yaml`.
 
 ## Quickstart (local, no cloud needed)
 
 ```bash
 cp .env.example .env
-make dev                                   # docker compose up -d (postgres + api)
+make dev                                   # postgres + mosquitto + api + ingest
 make migrate                               # alembic upgrade head
 make seed                                  # demo user + hub-001 (writes .demo-hub-token)
-make fake-batch                            # POSTs a batch to /v1/hubs/hub-001/batch
 
-# in another shell — get a user JWT, then read the node back through Norman:
+# --- MQTT path (what Carl actually does) ---
+make fake-publish                          # streams flat NodeMessage to carl/hub-001/aabbccddeeff
+# (Ctrl+C after a few cycles)
+
+# --- HTTPS batch path (alternate, richer) ---
+make fake-batch                            # POSTs 1 room + 1 plant + 1 camera in one batch
+
+# Read it all back through Norman's HTTP API:
 TOKEN=$(curl -s -X POST localhost:8000/v1/auth/login \
   -d "username=demo@norman.local&password=demodemo1" \
   | python -c "import sys,json;print(json.load(sys.stdin)['access_token'])")
-curl -s -H "Authorization: Bearer $TOKEN" localhost:8000/v1/nodes | python -m json.tool
+curl -s -H "Authorization: Bearer $TOKEN" localhost:8000/v1/rooms | python -m json.tool
 curl -s -H "Authorization: Bearer $TOKEN" \
-  "localhost:8000/v1/nodes/aabbccddeeff/history?range=24h" | python -m json.tool
+  "localhost:8000/v1/nodes?kind=plant" | python -m json.tool
+curl -s -H "Authorization: Bearer $TOKEN" \
+  localhost:8000/v1/nodes/aabbccddeeff/snapshot | python -m json.tool   # joined view
+docker compose run --rm api python -m apps.ml.train                      # writes a placeholder prediction
+curl -s -H "Authorization: Bearer $TOKEN" \
+  localhost:8000/v1/nodes/aabbccddeeff/predictions | python -m json.tool
 
 open http://localhost:8000/docs            # Swagger UI — same Node/Reading shapes as the hub
 ```

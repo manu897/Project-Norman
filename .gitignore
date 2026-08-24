@@ -21,11 +21,12 @@ env/
 htmlcov/
 
 # Terraform
+# NB: .terraform.lock.hcl is deliberately NOT ignored — HashiCorp recommends
+# committing it so provider versions resolve identically on every machine.
 infra/terraform/.terraform/
 infra/terraform/*.tfstate
 infra/terraform/*.tfstate.backup
 infra/terraform/*.tfvars
-infra/terraform/.terraform.lock.hcl
 
 # Editors
 .vscode/

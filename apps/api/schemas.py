@@ -10,22 +10,25 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
-from packages.schemas.telemetry import Calibration, HubBatchUpload, Reading
+from packages.schemas.telemetry import Calibration, HubBatchUpload, NodeKind, Reading
 
-# Re-export shared schemas so router files can import everything from one place.
 __all__ = [
     "RegisterRequest",
     "TokenResponse",
     "HubCreate",
     "HubOut",
     "HubCreateOut",
+    "RoomOut",
+    "RoomDetailOut",
     "NodeOut",
+    "SnapshotOut",
     "HistoryOut",
     "PredictionOut",
     "BatchAcceptedOut",
     "Reading",
     "Calibration",
     "HubBatchUpload",
+    "NodeKind",
 ]
 
 
@@ -67,21 +70,49 @@ class HubCreateOut(HubOut):
     api_token: str
 
 
-# --- Nodes (mirror of hub's Node schema) ---
+# --- Rooms ---
+
+
+class RoomOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    hub_id: str
+    name: str
+    created_at: datetime
+
+
+# --- Nodes (mirror of hub's Node schema, extended with kind/room_id/species) ---
 
 
 class NodeOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: str
+    kind: NodeKind
     mac: str
     name: str
     hub_id: str
+    room_id: str | None
+    species: str | None
     online: bool
     last_seen: datetime | None
     battery_pct: int | None
     latest: Reading | None
     calibration: Calibration | None
+
+
+class RoomDetailOut(RoomOut):
+    """A room + its assigned nodes (room-kind + plants in it)."""
+
+    nodes: list[NodeOut]
+
+
+class SnapshotOut(BaseModel):
+    """Plant's joined view: plant probe readings + assigned room's ambient."""
+
+    plant: NodeOut
+    room: NodeOut | None  # the room-kind node in plant.room_id (None if no room node yet)
 
 
 # --- History (mirror of hub's History schema) ---
@@ -100,7 +131,7 @@ class PredictionOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: UUID
-    hub_id: str
+    node_id: str
     ts: datetime
     kind: str
     payload: dict
@@ -110,5 +141,6 @@ class PredictionOut(BaseModel):
 
 
 class BatchAcceptedOut(BaseModel):
+    rooms_seen: int
     nodes_seen: int
     samples_inserted: int

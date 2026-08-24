@@ -16,6 +16,7 @@ dependencies = [
     "sqlalchemy[asyncio]>=2.0",
     "alembic>=1.14",
     "psycopg2-binary>=2.9",
+    "aiomqtt>=2.3",
     "python-jose[cryptography]>=3.3",
     "passlib[bcrypt]>=1.7",
     "python-multipart>=0.0.12",

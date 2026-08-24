@@ -15,6 +15,15 @@ services:
       timeout: 5s
       retries: 10
 
+  mosquitto:
+    image: eclipse-mosquitto:2
+    ports:
+      - "1883:1883"
+    volumes:
+      - ./infra/mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+      - mosquitto_data:/mosquitto/data
+      - mosquitto_log:/mosquitto/log
+
   api:
     build:
       context: .
@@ -33,5 +42,23 @@ services:
       - ./packages:/app/packages:ro
       - ./migrations:/app/migrations:ro
 
+  ingest:
+    build:
+      context: .
+      dockerfile: apps/ingest/Dockerfile
+    env_file: .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      mosquitto:
+        condition: service_started
+      api:
+        condition: service_started
+    volumes:
+      - ./apps:/app/apps:ro
+      - ./packages:/app/packages:ro
+
 volumes:
   postgres_data:
+  mosquitto_data:
+  mosquitto_log:

@@ -1,0 +1,69 @@
+# Production overrides for docker-compose.yml.
+#
+# Bring up with: docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+#
+# Differences from the base compose:
+#   - caddy:     NEW. Terminates TLS on :443 for the API and reverse-proxies to
+#                api:8000 internally. Exists because Cloudflare's proxy only
+#                forwards to a fixed origin port list and 8000 isn't on it —
+#                without Caddy, Cloudflare→origin would have to be plaintext.
+#   - api:       not published to the host (reachable only via caddy), no
+#                live-reload, 2 workers
+#   - mosquitto: prod conf (auth + TLS on public 8883, plain 1883 internal only)
+#   - postgres:  5432 not published
+#   - all:       restart unless-stopped, no source bind-mounts
+#
+# Expects on the host (under the Project-Norman checkout root):
+#   .env                                   — JWT_SECRET, MQTT_USERNAME/PASSWORD,
+#                                            NORMAN_DOMAIN, ACME_EMAIL, DB creds
+#   infra/mosquitto/secrets/passwd         — produced by `mosquitto_passwd -b -c`
+#   infra/mosquitto/secrets/fullchain.pem  — from /etc/letsencrypt/live/mqtt.<domain>/
+#   infra/mosquitto/secrets/privkey.pem    — from /etc/letsencrypt/live/mqtt.<domain>/
+
+services:
+  postgres:
+    restart: unless-stopped
+    ports: !override []   # don't expose 5432 to the public internet
+
+  mosquitto:
+    restart: unless-stopped
+    ports: !override
+      - "8883:8883"       # 1883 deliberately NOT published — internal only
+    volumes: !override
+      - ./infra/mosquitto/mosquitto.prod.conf:/mosquitto/config/mosquitto.conf:ro
+      - ./infra/mosquitto/secrets/passwd:/mosquitto/config/passwd:ro
+      - ./infra/mosquitto/secrets/fullchain.pem:/mosquitto/certs/fullchain.pem:ro
+      - ./infra/mosquitto/secrets/privkey.pem:/mosquitto/certs/privkey.pem:ro
+      - mosquitto_data:/mosquitto/data
+      - mosquitto_log:/mosquitto/log
+
+  api:
+    restart: unless-stopped
+    ports: !override []   # not published; caddy reaches it as api:8000
+    command: >
+      sh -c "alembic upgrade head &&
+             uvicorn apps.api.main:app --host 0.0.0.0 --port 8000 --workers 2"
+    volumes: !override []   # don't bind-mount source in prod
+
+  ingest:
+    restart: unless-stopped
+    volumes: !override []
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    depends_on:
+      - api
+    env_file: .env          # supplies NORMAN_DOMAIN + ACME_EMAIL to the Caddyfile
+    ports:
+      - "80:80"             # ACME HTTP-01 challenge + HTTPS redirect
+      - "443:443"
+    volumes:
+      - ./infra/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data    # cert storage — MUST persist or certs re-issue on
+                            # every restart and hit Let's Encrypt rate limits
+      - caddy_config:/config
+
+volumes:
+  caddy_data:
+  caddy_config:
