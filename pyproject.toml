@@ -19,6 +19,13 @@ dependencies = [
     "aiomqtt>=2.3",
     "python-jose[cryptography]>=3.3",
     "passlib[bcrypt]>=1.7",
+    # passlib 1.7.x (unmaintained since 2020) probes bcrypt internals on
+    # first use to detect a legacy wrap bug. bcrypt>=4.1 removed the
+    # attribute that probe relies on, so ANY password (regardless of length
+    # or content) crashes with "password cannot be longer than 72 bytes" —
+    # a red herring; the actual input never gets that far. Pin below the
+    # break until passlib ships a fix (github.com/pyca/bcrypt/issues/684).
+    "bcrypt<4.1",
     "python-multipart>=0.0.12",
     "httpx>=0.27",
 ]
