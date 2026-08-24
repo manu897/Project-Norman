@@ -4,9 +4,18 @@ Aimed at Carl's end-state shape: three node kinds (plant/room/camera),
 hub-scoped rooms, plant↔room assignment carried on the plant node,
 predictions scoped per-plant-node (not per-hub).
 
-Revision ID: 0003_rooms_kind_per_node_predictions
+Revision ID: 0003_rooms_node_kinds
 Revises: 0002_nodes_and_hub_token
 Create Date: 2026-06-12
+
+NOTE: Alembic's own bookkeeping table (`alembic_version.version_num`) is a
+plain VARCHAR(32) — that limit is Alembic's default, not something we
+control per-project. Keep every revision id at or under 32 characters, or
+`alembic upgrade` fails on the final UPDATE with StringDataRightTruncation
+after the migration's real work has already run (and rolled back, since
+Postgres DDL is transactional — no partial-apply risk, just a wasted run).
+The original id here (0003_rooms_kind_per_node_predictions, 36 chars) hit
+exactly that.
 """
 
 from collections.abc import Sequence
@@ -15,7 +24,7 @@ import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 
-revision: str = "0003_rooms_kind_per_node_predictions"
+revision: str = "0003_rooms_node_kinds"
 down_revision: str | None = "0002_nodes_and_hub_token"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
