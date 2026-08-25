@@ -18,6 +18,7 @@ from apps.api.schemas import (
     NodeOut,
     PredictionOut,
     Reading as ReadingSchema,
+    RoomEnv,
     SnapshotOut,
 )
 from apps.api.security import current_user
@@ -79,27 +80,85 @@ def _is_online(node: Node, now: datetime) -> bool:
     return (now - node.last_seen_at) <= timedelta(minutes=cutoff_minutes)
 
 
+async def _find_room_node(plant: Node, session: AsyncSession) -> Node | None:
+    """The room-kind node assigned to `plant`, if any.
+
+    Two lookup conventions, tried in order (see docs/api.md): a room node
+    whose own `room_id` matches the plant's, or — the convention Carl's hub
+    actually uses — a room node whose `id` equals the plant's `room_id`.
+    """
+    if not plant.room_id:
+        return None
+    stmt = select(Node).where(
+        Node.hub_id == plant.hub_id,
+        Node.room_id == plant.room_id,
+        Node.kind == NodeKind.room.value,
+    )
+    room_node = (await session.scalars(stmt)).first()
+    if room_node is not None:
+        return room_node
+    stmt2 = select(Node).where(
+        Node.hub_id == plant.hub_id,
+        Node.id == plant.room_id,
+        Node.kind == NodeKind.room.value,
+    )
+    return (await session.scalars(stmt2)).first()
+
+
+async def _room_env_for(plant: Node, session: AsyncSession) -> RoomEnv | None:
+    """Embedded `room` field for a plant node — mirrors the graft the hub
+    performs on `/api/nodes` before returning it. `None` for room/camera
+    nodes themselves, or a plant with no room assigned or no room reading yet.
+    """
+    if plant.kind != NodeKind.plant.value:
+        return None
+    room_node = await _find_room_node(plant, session)
+    if room_node is None:
+        return None
+    latest = await _latest_reading(room_node.id, session)
+    if latest is None:
+        return None
+    return RoomEnv(
+        source=room_node.id,
+        ts=latest.ts,
+        temperature_c=latest.temperature_c,
+        humidity_pct=latest.humidity_pct,
+        pressure_hpa=latest.pressure_hpa,
+        illuminance_lux=latest.illuminance_lux,
+    )
+
+
 async def _to_node_out(node: Node, session: AsyncSession, now: datetime) -> NodeOut:
     latest = await _latest_reading(node.id, session)
+    room = await _room_env_for(node, session)
     return NodeOut(
         id=node.id,
-        kind=NodeKind(node.kind),
         mac=node.mac,
         name=node.name,
+        node_type=NodeKind(node.kind),
+        room_id=node.room_id or "",  # Carl's contract: empty string, never null
         hub_id=node.hub_id,
-        room_id=node.room_id,
         species=node.species,
         online=_is_online(node, now),
         last_seen=node.last_seen_at,
         battery_pct=node.battery_pct,
         latest=latest,
         calibration=node.calibration,
+        room=room,
     )
 
 
 @router.get("", response_model=list[NodeOut])
 async def list_nodes(
-    kind: NodeKind | None = Query(None, description="Filter by node kind"),
+    kind: NodeKind | None = Query(
+        None,
+        description=(
+            "Filter by node kind. Omit to get plant+room only (matches Carl's "
+            "node_type enum — camera is a Norman-only bookkeeping kind that "
+            "would fail to decode in the iOS app's NodeType enum, so it's "
+            "excluded unless explicitly requested)."
+        ),
+    ),
     user: User = Depends(current_user),
     session: AsyncSession = Depends(get_session),
 ) -> list[NodeOut]:
@@ -107,6 +166,8 @@ async def list_nodes(
     stmt = select(Node).join(Hub, Hub.id == Node.hub_id).where(Hub.owner_id == user.id)
     if kind is not None:
         stmt = stmt.where(Node.kind == kind.value)
+    else:
+        stmt = stmt.where(Node.kind != NodeKind.camera.value)
     nodes = (await session.scalars(stmt)).all()
     now = datetime.now(timezone.utc)
     return [await _to_node_out(n, session, now) for n in nodes]
@@ -180,28 +241,8 @@ async def get_plant_snapshot(
     now = datetime.now(timezone.utc)
     plant_out = await _to_node_out(plant, session, now)
 
-    room_out: NodeOut | None = None
-    if plant.room_id is not None:
-        # Find the room-kind node (if any) in this room within the same hub.
-        stmt = select(Node).where(
-            Node.hub_id == plant.hub_id,
-            Node.room_id == plant.room_id,
-            Node.kind == NodeKind.room.value,
-        )
-        # A room *may* have its own ambient sensor, identified by sharing the room_id.
-        # Convention: the hub sets `room_id` on a room-node to point at itself's room.
-        room_node = (await session.scalars(stmt)).first()
-        if room_node is None:
-            # Fallback: room-node identified by `id == plant.room_id` (when the hub
-            # uses the room-node's id as the room id — see ingest-protocol.md).
-            stmt2 = select(Node).where(
-                Node.hub_id == plant.hub_id,
-                Node.id == plant.room_id,
-                Node.kind == NodeKind.room.value,
-            )
-            room_node = (await session.scalars(stmt2)).first()
-        if room_node is not None:
-            room_out = await _to_node_out(room_node, session, now)
+    room_node = await _find_room_node(plant, session)
+    room_out = await _to_node_out(room_node, session, now) if room_node is not None else None
 
     return SnapshotOut(plant=plant_out, room=room_out)
 
