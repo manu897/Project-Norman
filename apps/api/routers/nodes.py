@@ -31,10 +31,17 @@ _RANGE_TO_DELTA: dict[str, timedelta] = {
     "7d": timedelta(days=7),
     "30d": timedelta(days=30),
 }
-_RANGE_TO_BUCKET: dict[str, str] = {
-    "24h": "5 minutes",
-    "7d": "1 hour",
-    "30d": "6 hours",
+# Bound as a real timedelta, not a Postgres interval-literal string. Postgres
+# infers time_bucket()'s first argument as `interval`, and asyncpg's interval
+# codec expects a Python timedelta (or its own Interval type) to encode that
+# — handing it a plain str like "5 minutes" makes asyncpg try `value.days`
+# on a string and blow up with `asyncpg.exceptions.DataError`. Confirmed live
+# against production: every call to this endpoint failed before a single
+# row came back, for any range.
+_RANGE_TO_BUCKET: dict[str, timedelta] = {
+    "24h": timedelta(minutes=5),
+    "7d": timedelta(hours=1),
+    "30d": timedelta(hours=6),
 }
 
 
