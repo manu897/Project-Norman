@@ -52,6 +52,18 @@ def _build_reading(ts: datetime, metric_values: dict[str, float]) -> ReadingSche
     return ReadingSchema(ts=ts, **metric_values)
 
 
+def _coerce_aggregated_value(metric: str, value: float) -> float:
+    """Coerce a SQL `avg()` result to whatever `Reading` expects for that
+    metric. `battery_pct` is `int | None` on `Reading` — averaging more than
+    one raw row in a downsample bucket (the normal case for any hub that
+    reports more than once per bucket) produces a fraction like 86.5, which
+    Pydantic v2 rejects outright (nonzero fractional part), 500ing the whole
+    `/history` endpoint. Every other metric is a legitimate float and passes
+    through unchanged.
+    """
+    return round(value) if metric == "battery_pct" else value
+
+
 async def _latest_reading(node_id: str, session: AsyncSession) -> ReadingSchema | None:
     """Latest sample, assembled from the most-recent value per metric."""
     sub = (
@@ -215,7 +227,7 @@ async def get_node_history(
     for r in rows:
         if r.metric not in KNOWN_METRICS:
             continue
-        by_ts.setdefault(r.ts, {})[r.metric] = r.value
+        by_ts.setdefault(r.ts, {})[r.metric] = _coerce_aggregated_value(r.metric, r.value)
 
     samples = [_build_reading(ts, vals) for ts, vals in sorted(by_ts.items())]
     return HistoryOut(node_id=node_id, range=range, samples=samples)

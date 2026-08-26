@@ -10,7 +10,7 @@ The project details are in [Confluence](https://arttme.atlassian.net/l/cp/kPyWw9
 
 ## Author:
 
-[Manideep Reddy Tamma](mailto:manideepreddytamma@gmail.com)
+[Manideep Reddy Tamma](mailto:manideep.2251.tamma@gmail.com)
 
 [LinkedIn](https://www.linkedin.com/in/manideep-reddy-tamma/)
 
