@@ -23,7 +23,7 @@ The project details are in [Confluence](https://arttme.atlassian.net/l/cp/kPyWw9
 - API: `https://norman.manideepreddy.com` (Cloudflare-proxied HTTPS via Caddy)
 - MQTT broker: `mqtts://mqtt.manideepreddy.com:8883` (TLS, DNS-only — not Cloudflare-proxied, MQTT can't be)
 
-Verified end-to-end: a Carl-shaped MQTT publish → `apps/ingest` → Postgres → `GET /v1/nodes` over public HTTPS, returning the correct Carl-compatible JSON shape. Real Carl hub hardware hasn't been pointed at it yet — see [infra/terraform/README.md](infra/terraform/README.md) §7 for how, once flashed.
+Verified end-to-end with **real Carl hub hardware** (2026-08-25): hub `hub-002` registered via `POST /v1/hubs`, a physical Thingy:53 room node's live T/H/P/lux/battery readings published over MQTT, ingested by `apps/ingest`, and confirmed matching via `GET /v1/nodes` over public HTTPS. No longer just a simulated (`fake_hub_publish.py`) test — see [infra/terraform/README.md](infra/terraform/README.md) §7 for the runbook this followed.
 
 ## What's in this repo
 

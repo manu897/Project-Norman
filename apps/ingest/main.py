@@ -43,6 +43,42 @@ def _parse_topic(topic: str) -> tuple[str, str] | None:
     return parts[1], parts[2]
 
 
+def _node_upsert_values(
+    msg: NodeMessage, site_id: str, ts: datetime
+) -> tuple[dict[str, object], dict[str, object]]:
+    """(insert_values, update_values) for the node upsert.
+
+    `node_type`/`room_id` are authoritative on every message when present —
+    a node ingested before the hub started sending them self-heals on its
+    very next publish, instead of staying wrong until someone hand-corrects
+    Postgres. When a message omits the field (older firmware not yet
+    updated), the update leaves whatever's already stored alone — that's
+    why they're only added to `update_values` conditionally, never
+    unconditionally.
+    """
+    insert_values: dict[str, object] = {
+        "id": msg.node,
+        "hub_id": site_id,
+        "kind": msg.node_type.value if msg.node_type else NodeKind.plant.value,
+        "room_id": msg.room_id,
+        "mac": msg.mac,
+        "name": msg.name,
+        "battery_pct": msg.battery_pct,
+        "last_seen_at": ts,
+    }
+    update_values: dict[str, object] = {
+        "mac": msg.mac,
+        "name": msg.name,
+        "battery_pct": msg.battery_pct,
+        "last_seen_at": ts,
+    }
+    if msg.node_type is not None:
+        update_values["kind"] = msg.node_type.value
+    if msg.room_id is not None:
+        update_values["room_id"] = msg.room_id
+    return insert_values, update_values
+
+
 async def handle_message(raw: bytes, topic: str) -> None:
     parsed = _parse_topic(topic)
     if parsed is None:
@@ -77,28 +113,11 @@ async def handle_message(raw: bytes, topic: str) -> None:
             return
         hub.last_seen_at = ts
 
+        insert_values, update_values = _node_upsert_values(msg, site_id, ts)
         node_stmt = (
             pg_insert(Node)
-            .values(
-                id=msg.node,
-                hub_id=site_id,
-                kind=NodeKind.plant.value,
-                mac=msg.mac,
-                name=msg.name,
-                battery_pct=msg.battery_pct,
-                last_seen_at=ts,
-            )
-            .on_conflict_do_update(
-                index_elements=[Node.id],
-                set_={
-                    # Don't overwrite hub-set fields (kind, room_id, species) once set —
-                    # only refresh what the MQTT payload actually carries.
-                    "mac": msg.mac,
-                    "name": msg.name,
-                    "battery_pct": msg.battery_pct,
-                    "last_seen_at": ts,
-                },
-            )
+            .values(**insert_values)
+            .on_conflict_do_update(index_elements=[Node.id], set_=update_values)
         )
         await session.execute(node_stmt)
 

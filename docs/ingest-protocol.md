@@ -36,6 +36,8 @@ UTF-8 JSON, single object per message. Exactly the shape `publish_node()` emits:
   "mac": "AA:BB:CC:DD:EE:FF",
   "name": "Bedroom Monstera",
   "online": true,
+  "node_type": "plant",
+  "room_id": "living-room",
   "soil_pct": 41.0,
   "temperature_c": 23.1,
   "humidity_pct": 58.0,
@@ -50,11 +52,15 @@ UTF-8 JSON, single object per message. Exactly the shape `publish_node()` emits:
 | `node` | Node id; MUST match the last topic segment. Mismatched messages are dropped. |
 | `mac`, `name` | Node identity. Stored on `nodes`. |
 | `online` | Hub-computed online flag. Defaults to true if absent. |
+| `node_type` | Optional, `plant` \| `room`. Absent on older firmware. **Authoritative on every message when present** — see below. |
+| `room_id` | Optional, omitted (not sent as `""`) when a plant has no room assigned. Same authoritative-when-present treatment as `node_type`. |
 | metric fields | All nullable; only present-and-non-null metrics get a row in `readings`. |
 
 **No `ts` field.** Norman stamps `readings.ts = NOW()` on receipt. This loses up to one publish interval of fidelity (≤30s typical) — acceptable for personal-scale time-series.
 
-**No `kind`/`room_id`/`species`/`calibration`.** Carl's MQTT path is plant-centric and doesn't carry these yet. Norman defaults `kind=plant`; room/species fields stay NULL until either Carl ships them or an HTTPS batch sets them.
+**No `calibration`.** Carl's MQTT path doesn't carry it; only the HTTPS batch path does.
+
+**History:** `node_type`/`room_id` were added to the wire format after the fact — the hub's `carl_node_snapshot_t` originally didn't carry them at all, so every MQTT-ingested node was silently hardcoded to `kind=plant` on first insert with no way to ever correct it short of a manual `UPDATE nodes` in Postgres. Confirmed live in production: a real Thingy:53 room sensor stayed misclassified as a plant indefinitely. Fixed on both sides — the hub now sends both fields, and ingest treats them as authoritative on *every* message, not just first insert, so a node stuck wrong from before this fix self-heals on its very next publish.
 
 ### Ingest behavior
 
@@ -63,7 +69,7 @@ For each message:
 2. Validate payload as `NodeMessage`. Validation errors dropped + logged.
 3. Verify `payload.node == topic node_id`. Mismatches dropped.
 4. **Verify `Hub(id=site_id)` exists.** If not, drop + log — the user must register the hub first via `POST /v1/hubs`. Norman does NOT auto-create hubs from MQTT messages (intentional: forces clean ownership).
-5. Upsert `Node` row (id, hub_id, mac, name, battery_pct, last_seen_at). Does not overwrite `kind`/`room_id`/`species` if already set by an HTTPS batch.
+5. Upsert `Node` row (id, hub_id, mac, name, battery_pct, last_seen_at). `kind`/`room_id` are refreshed **only when the message actually includes them** — an older/partial message never clobbers a value a previous message (or an HTTPS batch, or a manual correction) already set.
 6. Insert one `readings` row per present metric.
 7. Update `hubs.last_seen_at`.
 

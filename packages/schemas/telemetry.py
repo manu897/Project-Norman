@@ -108,8 +108,16 @@ class NodeMessage(BaseModel):
 
     Mirrors what Carl's `firmware/hub/main/norman_uplink.c::publish_node()`
     serializes. Flat per-node, no `ts` (Norman stamps receipt time), no
-    calibration / kind / room_id / species (Carl doesn't send them on this
-    path). All metric fields nullable.
+    calibration / species (Carl doesn't send those on this path). All metric
+    fields nullable.
+
+    `node_type`/`room_id` were added to the wire format after the fact — the
+    hub's `carl_node_snapshot_t` originally didn't carry them at all, so
+    every MQTT-ingested node was silently hardcoded to `plant` with no way
+    to ever correct it. Both stay optional here: older firmware that hasn't
+    picked up the change yet simply omits them, and ingest treats "field
+    absent" as "leave whatever's already stored alone" rather than
+    clobbering it back to a default — see apps/ingest/main.py.
     """
 
     model_config = ConfigDict(extra="ignore")  # forward-compat: tolerate new keys
@@ -118,6 +126,8 @@ class NodeMessage(BaseModel):
     mac: Annotated[str, Field(min_length=11, max_length=17)]
     name: Annotated[str, Field(min_length=1, max_length=255)]
     online: bool = True
+    node_type: NodeKind | None = None
+    room_id: str | None = None
 
     temperature_c: float | None = None
     humidity_pct: float | None = None
