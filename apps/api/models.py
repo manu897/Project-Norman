@@ -12,6 +12,7 @@ from datetime import datetime
 
 from sqlalchemy import (
     JSON,
+    Boolean,
     DateTime,
     Float,
     ForeignKey,
@@ -34,6 +35,11 @@ class User(Base):
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     email: Mapped[str] = mapped_column(String(255), unique=True, index=True, nullable=False)
     hashed_password: Mapped[str] = mapped_column(String(255), nullable=False)
+    # Sees every hub/node/user across the whole deployment via /v1/admin/*,
+    # regardless of ownership. Never settable through the API — flip it
+    # directly in Postgres (`UPDATE users SET is_superuser = true WHERE
+    # email = '...'`). Deliberately no self-service promotion path.
+    is_superuser: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

@@ -60,6 +60,15 @@ async def current_user(
     return user
 
 
+async def current_superuser(user: User = Depends(current_user)) -> User:
+    """Gate for /v1/admin/*. A valid JWT alone isn't enough — the account
+    behind it must have `is_superuser` set, which is never settable through
+    the API (see the migration note in models.py)."""
+    if not user.is_superuser:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Admin access required")
+    return user
+
+
 # --- Per-hub API token (ingest) ---
 
 HUB_TOKEN_PREFIX = "ch_"  # carl-hub

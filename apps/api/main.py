@@ -3,7 +3,7 @@ import logging
 from fastapi import FastAPI
 
 from apps.api.config import get_settings
-from apps.api.routers import auth, hubs, ingest, nodes, rooms
+from apps.api.routers import admin, auth, hubs, ingest, nodes, rooms
 
 settings = get_settings()
 logging.basicConfig(
@@ -27,6 +27,7 @@ app.include_router(hubs.router)
 app.include_router(rooms.router)
 app.include_router(nodes.router)
 app.include_router(ingest.router)
+app.include_router(admin.router)
 
 
 @app.get("/health", tags=["meta"])

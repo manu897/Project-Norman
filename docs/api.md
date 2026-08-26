@@ -70,6 +70,23 @@ Carl's hub grafts a room's ambient reading directly onto each plant node it retu
 ### Ingest (per-hub bearer token)
 - `POST /v1/hubs/{hub_id}/batch` — see [ingest-protocol.md](ingest-protocol.md).
 
+### Admin (superuser only)
+
+Every endpoint above scopes to `current_user`'s own hubs (`Hub.owner_id == user.id`) — a normal account, including the iOS app, only ever sees its own data. The `/v1/admin/*` routes are the one deliberate exception: unscoped by ownership, for a single operator account to see the whole deployment.
+
+- `GET /v1/admin/stats` — deployment-wide totals: user count, hub count, node count, reading count.
+- `GET /v1/admin/users` — every account, with `hub_count` per user.
+- `GET /v1/admin/hubs` — every hub regardless of owner, with `owner_email` and `node_count`.
+- `GET /v1/admin/nodes?kind=` — every node regardless of owner, with `owner_email`. Unlike `GET /v1/nodes`, camera nodes are included by default — this view isn't constrained by what the iOS app's `NodeType` enum can decode, since nothing here is iOS-facing.
+
+Gated by `User.is_superuser` (401 if unauthenticated, 403 if authenticated but not a superuser). **There is no API endpoint to grant this** — it's flipped directly in Postgres after migration `0004_user_is_superuser`:
+
+```sql
+UPDATE users SET is_superuser = true WHERE email = '<the chosen account>';
+```
+
+Deliberately no self-service promotion path — this is the same "do it via direct DB access, not a feature" pattern already used for one-off operational tasks on this deployment.
+
 ## What is NOT here vs. the hub
 
 - `POST /api/setup/wifi` — captive-portal Wi-Fi, hub-only.

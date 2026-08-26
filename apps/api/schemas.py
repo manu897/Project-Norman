@@ -41,6 +41,10 @@ __all__ = [
     "Calibration",
     "HubBatchUpload",
     "NodeKind",
+    "AdminUserOut",
+    "AdminHubOut",
+    "AdminNodeOut",
+    "AdminStatsOut",
 ]
 
 
@@ -178,3 +182,39 @@ class BatchAcceptedOut(BaseModel):
     rooms_seen: int
     nodes_seen: int
     samples_inserted: int
+
+
+# --- Admin (superuser only — see /v1/admin/*, unscoped by ownership) ---
+
+
+class AdminUserOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    email: str
+    is_superuser: bool
+    created_at: datetime
+    hub_count: int
+
+
+class AdminHubOut(BaseModel):
+    id: str
+    name: str
+    location: str | None
+    owner_email: str
+    last_seen_at: datetime | None
+    created_at: datetime
+    node_count: int
+
+
+class AdminNodeOut(NodeOut):
+    """Same shape iOS/Carl-IOS consumes, plus who owns it — admin view only."""
+
+    owner_email: str
+
+
+class AdminStatsOut(BaseModel):
+    user_count: int
+    hub_count: int
+    node_count: int
+    reading_count: int
