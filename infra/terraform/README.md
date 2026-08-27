@@ -328,7 +328,7 @@ This is the number that decides whether GCP stays the host. Estimates in docs dr
 2. Filter to project `norman-mrt`, group by **SKU**
 3. Expect one meaningful line — an external/static IP charge SKU — and effectively nothing else
 
-Two days of data extrapolates cleanly to a monthly run-rate. If it's near **$3.65/mo**, the estimate held. If the compute or disk SKUs show non-zero, something fell outside the free tier — most likely the wrong zone or an oversized disk.
+Two days of data extrapolates cleanly to a monthly run-rate. If it's near **£2.75/mo**, the estimate held. If the compute or disk SKUs show non-zero, something fell outside the free tier — most likely the wrong zone or an oversized disk.
 
 Also check **Credits** on the same page: a live $300 / 90-day trial would zero the bill for three months and change the calculus.
 
@@ -402,19 +402,19 @@ cd infra/terraform && terraform destroy
 
 ## What this actually costs
 
-**Expect roughly $4/month, not $0.** "Always-free tier" does not mean the whole deployment is free.
+**Expect roughly £2.75/month, not £0.** "Always-free tier" does not mean the whole deployment is free. (The billing account here is GBP — see the note below on why USD estimates you'll find elsewhere don't map cleanly.)
 
 Genuinely free:
 
 | Resource | Allowance | This deployment |
 |---|---|---|
-| `e2-micro` instance | 744 h/mo in `us-west1`/`us-central1`/`us-east1` | 1 instance, 24×7 → $0 |
-| Boot disk | 30 GB-month `pd-standard` | exactly 30 GB → $0 |
-| GCS Standard | 5 GB in those same regions | ~0 GB for a long time → $0 |
-| Egress | 1 GB/mo to North America | telemetry JSON, tens of MB → $0 |
-| Firewall rules | unlimited | 2 → $0 |
+| `e2-micro` instance | 744 h/mo in `us-west1`/`us-central1`/`us-east1` | 1 instance, 24×7 → £0 |
+| Boot disk | 30 GB-month `pd-standard` | exactly 30 GB → £0 |
+| GCS Standard | 5 GB in those same regions | ~0 GB for a long time → £0 |
+| Egress | 1 GB/mo to North America | telemetry JSON, tens of MB → £0 |
+| Firewall rules | unlimited | 2 → £0 |
 
-**Not free — the external IPv4 address.** Since **February 2024** Google charges for *all* external IPv4 addresses, including in-use ones attached to a running VM, at roughly **$0.005/hour ≈ $3.65/month**. The always-free tier does not exempt it. This is the entire bill for a working Norman.
+**Not free — the external IPv4 address.** Since February 2020 Google charges for external IPv4 addresses attached to a running standard VM. Pulled directly from the Cloud Billing Catalog API (`services/6F81-5844-456A` → SKU "External IP Charge on a Standard VM", scoped to this billing account's actual currency): **£0.003760/hour ≈ £2.75/month at 730 h**. The always-free tier does not exempt it. This is the entire bill for a working Norman — assuming the IP stays attached to a running instance. A reserved static IP that's ever *unattached* (VM stopped without releasing the address) bills at roughly double that under the separate "Static Ip Charge" SKU (~£0.00752/hour ≈ £5.49/month) — another reason not to stop the VM without also releasing the IP.
 
 Two things that follow from that:
 

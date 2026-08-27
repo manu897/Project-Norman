@@ -87,7 +87,7 @@ open http://localhost:8000/docs            # Swagger UI — same Node/Reading sh
 
 ## Deploy
 
-**GCP free tier (current):** Terraform under [infra/terraform/](infra/terraform/) provisions a free-tier `e2-micro` VM, static IP, and a GCS bucket for ML artifacts, with Caddy terminating TLS for the API. Full runbook — including the ~$3.65/mo real cost (the external IPv4, not the compute) and the budget-alert step — in [infra/terraform/README.md](infra/terraform/README.md).
+**GCP free tier (current):** Terraform under [infra/terraform/](infra/terraform/) provisions a free-tier `e2-micro` VM, static IP, and a GCS bucket for ML artifacts, with Caddy terminating TLS for the API. Full runbook — including the ~£2.75/mo real cost (the external IPv4, not the compute; billing account is GBP) and the budget-alert step — in [infra/terraform/README.md](infra/terraform/README.md).
 
 **Self-hosted alternative:** [infra/home/README.md](infra/home/README.md) — run Norman on a spare always-on Ubuntu machine on the same LAN as the Carl hub, reached from outside via Cloudflare Tunnel. Architecturally simpler (no public MQTT broker, no cert renewal dance, since the hub and Norman share a network) but requires a machine that's genuinely always on — Carl's MQTT publish loop has no buffering, so downtime here is silently-dropped telemetry, not a queued backlog.
 

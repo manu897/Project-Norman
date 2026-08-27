@@ -29,7 +29,7 @@ Compared to the GCP deployment, this **deletes**: Caddy, certbot, the Let's Encr
 
 ## Cost
 
-A laptop at 10–20 W idle is roughly **£2–3.50/month** in electricity at ~£0.25/kWh — cheaper than GCP's ~$3.65/mo external-IP charge, with 8–16 GB RAM instead of 1 GB.
+A laptop at 10–20 W idle is roughly **£2–3.50/month** in electricity at ~£0.25/kWh — comparable to, maybe cheaper than, GCP's ~£2.75/mo external-IP charge (the actual bill for the always-free `e2-micro` deployment; see [`infra/terraform/README.md`](../terraform/README.md#what-this-actually-costs)), but with 8–16 GB RAM instead of 1 GB.
 
 A desktop tower at 50–100 W is ~£9–18/mo and loses to GCP on cost. Use a laptop or mini PC.
 
